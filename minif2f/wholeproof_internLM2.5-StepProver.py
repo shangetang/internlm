@@ -1,15 +1,19 @@
 # Lean proof search with LeanDojo interaction
 # Author: Sean Welleck
+
+#20250105 modified by Shange, whole proof
 import json, os
 import heapq
 import subprocess
 import time
 import transformers
-# import vllm
+import vllm
 from datetime import datetime
-from lean_dojo import *
+# from lean_dojo import *
 from pathlib import Path
 from tqdm import tqdm, trange
+
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 
 def chat_template_to_prompt(prompt_list):
@@ -37,32 +41,32 @@ def _prompt_function(theorem, state, proof_before=""):
     prompt = [{"role": "user", "content": input_template}]
     return prompt
 
-# def generate_vllm(prompt, model, tokenizer, temperatures, num_samples, stop, max_tokens=256):
-#     if not isinstance(prompt, str):
-#         prompt = chat_template_to_prompt(prompt)
-#     texts, scores = [], []
-#     for temperature in temperatures:
-#         params = vllm.SamplingParams(
-#             n=num_samples,
-#             temperature=temperature,
-#             use_beam_search=temperature==0.0,
-#             max_tokens=max_tokens,
-#             stop=stop,
-#             length_penalty=0.0 if temperature==0.0 else 1.0,
-#             logprobs=True,
-#         )
-#         outputs = model.generate([prompt], params, use_tqdm=False)
-#         if len(outputs) == 0:
-#             return [], []
-#         for output in outputs[0].outputs:
-#             text = output.text.replace(tokenizer.eos_token, '')
-#             score = output.cumulative_logprob/max(len(output.token_ids), 1)
-#             texts.append(text)
-#             scores.append(score)
+def generate_vllm(prompt, model, tokenizer, temperatures, num_samples, stop, max_tokens=256):
+    if not isinstance(prompt, str):
+        prompt = chat_template_to_prompt(prompt)
+    texts, scores = [], []
+    for temperature in temperatures:
+        params = vllm.SamplingParams(
+            n=num_samples,
+            temperature=temperature,
+            # use_beam_search=temperature==0.0,
+            max_tokens=max_tokens,
+            stop=stop,
+            # length_penalty=0.0 if temperature==0.0 else 1.0,
+            logprobs=True,
+        )
+        outputs = model.generate([prompt], params, use_tqdm=False)
+        if len(outputs) == 0:
+            return [], []
+        for output in outputs[0].outputs:
+            text = output.text.replace(tokenizer.eos_token, '')
+            score = output.cumulative_logprob/max(len(output.token_ids), 1)
+            texts.append(text)
+            scores.append(score)
 
-#     texts = list(map(prompt_style_internlm_chat_stepprover_extractor,texts))
-#     texts, scores = _unique_sorted(texts, scores)
-#     return texts, scores
+    texts = list(map(prompt_style_internlm_chat_stepprover_extractor,texts))
+    texts, scores = _unique_sorted(texts, scores)
+    return texts, scores
 
 
 def _unique_sorted(texts, scores):
@@ -83,7 +87,6 @@ def _tactic_state(state):
     return ts
 
 
-
 def best_first_search(
         theorem,
         model,
@@ -98,13 +101,8 @@ def best_first_search(
 ) -> dict:
     """Best first search."""
     attempt_results = []
-
     try:
-        # with Dojo(theorem, hard_timeout=timeout,additional_imports=["Mathlib.Tactic"]) as (dojo, init_state):
-        # this line has DojoInit error
-        # with Dojo(theorem, timeout=timeout, additional_imports=["Mathlib.Tactic"]) as (dojo, init_state):
-        with Dojo(theorem, timeout=timeout) as (dojo, init_state):
-
+        with Dojo(theorem, hard_timeout=timeout,additional_imports=["Mathlib.Tactic"]) as (dojo, init_state):
 
             start = time.time()
             proof_finished = False
@@ -121,22 +119,15 @@ def best_first_search(
                 # State de-duplication needs re-compile Lean 4, whose code will be released soon.
                 # Here we are tolerating duplicated states, should not impact performance on miniF2F. 
                 proof_before = "\n".join(steps)
-
-
-                # step_cands, step_scores = generate_vllm(
-                #     prompt_fn(theorem, ts, proof_before),
-                #     model,
-                #     tokenizer,
-                #     temperatures,
-                #     num_samples,
-                #     stop=['<|im_end|>',],
-                #     max_tokens=max_tokens
-                # )
-
-                # only for downloading lean4 to local
-                step_cands, step_scores = ["omega"], [0.5]
-
-
+                step_cands, step_scores = generate_vllm(
+                    prompt_fn(theorem, ts, proof_before),
+                    model,
+                    tokenizer,
+                    temperatures,
+                    num_samples,
+                    stop=['<|im_end|>',],
+                    max_tokens=max_tokens
+                )
                 step_cands = [s.strip() for s in step_cands]
 
                 for step, score in zip(step_cands, step_scores):
@@ -169,21 +160,11 @@ def best_first_search(
                             heapq.heappush(
                                 queue, (new_score, steps+[step], result, trace+[step_trace])
                             )
-    # except (DojoInitError, DojoHardTimeoutError, DojoCrashError, subprocess.CalledProcessError) as e:
-    except (DojoInitError, DojoTacticTimeoutError, DojoCrashError, subprocess.CalledProcessError) as e:
-        
-        #test
-        print(e,type(e))
-
-
+    except (DojoInitError, DojoHardTimeoutError, DojoCrashError, subprocess.CalledProcessError) as e:
         if len(attempt_results) == 0:
             attempt_results.append({
                 'theorem': theorem.full_name,
                 'success': False,
-
-                # # test
-                # 'detailed_failure_reson' : type(e),
-
                 'failure_reason': type(e).__name__
             })
 
@@ -195,6 +176,38 @@ def best_first_search(
         })
 
     return attempt_results
+
+# Shange
+def whole_proof_generation(
+        prompt,
+        # theorem,
+        model,
+        tokenizer,
+        max_iters,
+        temperatures,
+        num_samples,
+        prompt_fn,
+        timeout=600,
+        early_stop=False,
+        max_tokens=4096
+):
+
+    step_cands, step_scores = generate_vllm(
+        # prompt_fn(theorem, ts, proof_before),
+        prompt,
+        model,
+        tokenizer,
+        temperatures,
+        num_samples,
+        stop=['<|im_end|>',],
+        # stop=None,
+        max_tokens=max_tokens
+    )
+    step_cands = [s.strip() for s in step_cands]
+
+    return step_cands
+
+
 
 
 def _save(model_name, results, args_dict, output_dir, shard):
@@ -211,17 +224,17 @@ def _save(model_name, results, args_dict, output_dir, shard):
         print(output_file)
 
 
-# def _load_model(model_name, tp_degree):
-#     model = vllm.LLM(
-#         model=model_name,
-#         tensor_parallel_size=tp_degree,
-#         dtype='float16',
-#         max_num_batched_tokens=32768,
-#         trust_remote_code=True,
-#         enforce_eager=True
-#     )
-#     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name,trust_remote_code=True)
-#     return model, tokenizer
+def _load_model(model_name, tp_degree):
+    model = vllm.LLM(
+        model=model_name,
+        tensor_parallel_size=tp_degree,
+        dtype='float16',
+        max_num_batched_tokens=32768,
+        trust_remote_code=True,
+        enforce_eager=True
+    )
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name,trust_remote_code=True)
+    return model, tokenizer
 
 
 def _load_data(dataset_name, dataset_path):
@@ -237,14 +250,6 @@ def _load_data(dataset_name, dataset_path):
         else:
             data = [x for x in data if x['split'] == 'test']
         repo = LeanGitRepo(data[0]['url'], data[0]['commit'])
-        # repo = LeanGitRepo("https://github.com/wzj423/lean-dojo-mew", "d08b8ba")
-        # repo = LeanGitRepo.from_path(data[0]['url'])
-
-        # Shange 20250113 local repo
-        # repo = LeanGitRepo(url=LOCAL_REPO_PATH, commit="main")
-        # repo = LeanGitRepo(url="/scratch/gpfs/st3812/datasets/lean-dojo-mew", commit="main")
-        # repo = LeanGitRepo.from_path("/scratch/gpfs/st3812/datasets/lean-dojo-mew")
-        # assert repo.repo_type == 'local'
     else:
         raise NotImplementedError(dataset_name)
 
@@ -303,84 +308,114 @@ if __name__ == '__main__':
     parser.add_argument('--num-samples', type=int, default=32)
     parser.add_argument('--clear-process-hours', type=int, default=3)
     parser.add_argument('--temperatures', type=float, nargs='+', default=[0.0])
+
+
+    parser.add_argument('--input_path',type=str,default='')   
+
+    parser.add_argument('--output_path',type=str,default='')
     args = parser.parse_args()
-    # model, tokenizer = _load_model(args.model_name, args.tp_degree)
+    model, tokenizer = _load_model(args.model_name, args.tp_degree)
     output_dir = make_output_dir(args.output_dir)
 
-    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    # repo, data = _load_data(args.dataset_name, args.dataset_path)
+    
+    with open(args.input_path,"r") as file:
+        data = json.load(file)
 
-
-    # true if local repo
-    os.environ['DISABLE_REMOTE_CACHE'] = 'true'
-
-    # os.environ['DISABLE_REMOTE_CACHE'] = 'false'
-
-    # os.environ['CACHE_DIR'] = '/scratch/gpfs/st3812/.cache/lean_dojo'
-
-    # # use local repo
-    # LOCAL_REPO_PATH = "/scratch/gpfs/st3812/datasets/lean-dojo-mew"
-
-    repo, data = _load_data(args.dataset_name, args.dataset_path)
-
-    # #shange test trace
-    # traced_repo = trace(repo)
+    data = [idata for idata in data if idata["split"]=="test"]
 
     shard_size = len(data) // args.num_shards
-    data = data[args.shard*shard_size:(args.shard+1)*shard_size] if args.num_shards > 1+ args.shard else data[args.shard*shard_size:]
-    print("Shard size: %d" % (len(data)))
+    # data = data[args.shard*shard_size:(args.shard+1)*shard_size] if args.num_shards > 1+ args.shard else data[args.shard*shard_size:]
+    # print("Shard size: %d" % (len(data)))
 
-    # # test
-    # data = data[2:3]
-    
-    if args.resume_from is not None:
-        results, data = resume_from(args.resume_from, data, args.model_name,args.shard)
-    else:
-        results = []
+    # # # Shange
+    # data = data[0:10] 
+
+    # if args.resume_from is not None:
+    #     results, data = resume_from(args.resume_from, data, args.model_name,args.shard)
+    # else:
+    #     results = []
 
     start = time.time()
+    all_results = []
     for example in tqdm(data, total=len(data)):
-        file_path = example['file_path']
-        theorem_name = example['full_name']
-        try:
-            theorem = Theorem(repo, file_path, theorem_name)
-        except e:
-            print("file_path:", file_path)
-            print("theorem_name", theorem_name)
-            print(e)
-            aaaaa
 
-        attempt_results = best_first_search(
-            # theorem, model, tokenizer,
-            theorem, model="", tokenizer="",
+        theorem_name = example['name']
+        state = example["compilation_result"]["sorries"][0]["goal"]
+
+        # print(theorem_name)
+        # print(state)
+
+
+
+        input_template = (  f"---\nNAME: {theorem_name}\n\n"
+                                # f"---\nFILE:{theorem.file_path}\n\n"
+                                f"---\nPROOF_BEFORE: \n\n"
+                                f"---\nSTATE_BEFORE: {state}\n\n"
+                                f"---\nTACTIC: "
+                            )
+        prompt = [{"role": "user", "content": input_template}]
+
+
+
+        proof_list = whole_proof_generation(
+            prompt, model, tokenizer,
             max_iters=args.max_iters,
             prompt_fn=_prompt_function,
             temperatures=args.temperatures,
             num_samples=args.num_samples,
             timeout=args.timeout,
-            early_stop=args.early_stop
+            # early_stop=args.early_stop
+            early_stop=False
         )
+        print(theorem_name,len(proof_list))
 
-        result = {
-            'attempt_results': attempt_results,
-            'success': any([x['success'] for x in attempt_results]),
-            'example': example
-        }
+        example["proof"] = proof_list
 
-        results.append(result)
+        all_results.append(example)
 
-        _save(
-            model_name=args.model_name,
-            results=results,
-            args_dict=args.__dict__,
-            output_dir=output_dir,
-            shard=args.shard
-        )
-        print_stats(results)
+    with open(args.output_path,"w") as file:
+        json.dump(all_results,file,indent = 4)
+
+    print(f"saved to {args.output_path}")
+
+
+
+        # attempt_results = best_first_search(
+        #     theorem, model, tokenizer,
+        #     max_iters=args.max_iters,
+        #     prompt_fn=_prompt_function,
+        #     temperatures=args.temperatures,
+        #     num_samples=args.num_samples,
+        #     timeout=args.timeout,
+        #     early_stop=args.early_stop
+        # )
+
+        # result = {
+        #     'attempt_results': attempt_results,
+        #     'success': any([x['success'] for x in attempt_results]),
+        #     'example': example
+        # }
+
+        # results.append(result)
+
+        # _save(
+        #     model_name=args.model_name,
+        #     results=results,
+        #     args_dict=args.__dict__,
+        #     output_dir=output_dir,
+        #     shard=args.shard
+        # )
+        # print_stats(results)
+
+
         # The proof search occasionally leaves Lean processes open. As a workaround,
         # we periodically kill all Lean processes. Note that this may cause a proof search failure.
-        if args.shard == 0:
-            hours = 60*60*args.clear_process_hours
-            if time.time() - start > hours:
-                print("=== Killing active leanprover processes to mitigate leak")
-                os.system("ps aux | grep leanprover | awk '{print $2}' | xargs kill -9")
-                start = time.time()
+
+
+    # if args.shard == 0:
+    #     hours = 60*60*args.clear_process_hours
+    #     if time.time() - start > hours:
+    #         print("=== Killing active leanprover processes to mitigate leak")
+    #         os.system("ps aux | grep leanprover | awk '{print $2}' | xargs kill -9")
+    #         start = time.time()

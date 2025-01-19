@@ -5,11 +5,12 @@ import heapq
 import subprocess
 import time
 import transformers
-# import vllm
+import vllm
 from datetime import datetime
 from lean_dojo import *
 from pathlib import Path
 from tqdm import tqdm, trange
+import random
 
 
 def chat_template_to_prompt(prompt_list):
@@ -37,32 +38,33 @@ def _prompt_function(theorem, state, proof_before=""):
     prompt = [{"role": "user", "content": input_template}]
     return prompt
 
-# def generate_vllm(prompt, model, tokenizer, temperatures, num_samples, stop, max_tokens=256):
-#     if not isinstance(prompt, str):
-#         prompt = chat_template_to_prompt(prompt)
-#     texts, scores = [], []
-#     for temperature in temperatures:
-#         params = vllm.SamplingParams(
-#             n=num_samples,
-#             temperature=temperature,
-#             use_beam_search=temperature==0.0,
-#             max_tokens=max_tokens,
-#             stop=stop,
-#             length_penalty=0.0 if temperature==0.0 else 1.0,
-#             logprobs=True,
-#         )
-#         outputs = model.generate([prompt], params, use_tqdm=False)
-#         if len(outputs) == 0:
-#             return [], []
-#         for output in outputs[0].outputs:
-#             text = output.text.replace(tokenizer.eos_token, '')
-#             score = output.cumulative_logprob/max(len(output.token_ids), 1)
-#             texts.append(text)
-#             scores.append(score)
+def generate_vllm(prompt, model, tokenizer, temperatures, num_samples, stop, max_tokens=256):
+    if not isinstance(prompt, str):
+        prompt = chat_template_to_prompt(prompt)
+    texts, scores = [], []
+    for temperature in temperatures:
+        params = vllm.SamplingParams(
+            seed=seed,
+            n=num_samples,
+            temperature=temperature,
+            # use_beam_search=temperature==0.0,
+            max_tokens=max_tokens,
+            stop=stop,
+            length_penalty=0.0 if temperature==0.0 else 1.0,
+            logprobs=True,
+        )
+        outputs = model.generate([prompt], params, use_tqdm=False)
+        if len(outputs) == 0:
+            return [], []
+        for output in outputs[0].outputs:
+            text = output.text.replace(tokenizer.eos_token, '')
+            score = output.cumulative_logprob/max(len(output.token_ids), 1)
+            texts.append(text)
+            scores.append(score)
 
-#     texts = list(map(prompt_style_internlm_chat_stepprover_extractor,texts))
-#     texts, scores = _unique_sorted(texts, scores)
-#     return texts, scores
+    texts = list(map(prompt_style_internlm_chat_stepprover_extractor,texts))
+    texts, scores = _unique_sorted(texts, scores)
+    return texts, scores
 
 
 def _unique_sorted(texts, scores):
@@ -112,7 +114,9 @@ def best_first_search(
             visited = dict() 
 
             for iteration in trange(max_iters):
+
                 if len(queue) == 0 or proof_finished:
+
                     break
 
                 total_score, steps, state, trace = heapq.heappop(queue)
@@ -122,19 +126,18 @@ def best_first_search(
                 # Here we are tolerating duplicated states, should not impact performance on miniF2F. 
                 proof_before = "\n".join(steps)
 
+                step_cands, step_scores = generate_vllm(
+                    prompt_fn(theorem, ts, proof_before),
+                    model,
+                    tokenizer,
+                    temperatures,
+                    num_samples,
+                    stop=['<|im_end|>',],
+                    max_tokens=max_tokens
+                )
 
-                # step_cands, step_scores = generate_vllm(
-                #     prompt_fn(theorem, ts, proof_before),
-                #     model,
-                #     tokenizer,
-                #     temperatures,
-                #     num_samples,
-                #     stop=['<|im_end|>',],
-                #     max_tokens=max_tokens
-                # )
-
-                # only for downloading lean4 to local
-                step_cands, step_scores = ["omega"], [0.5]
+                # # only for downloading lean4 to local
+                # step_cands, step_scores = ["omega"], [0.5]
 
 
                 step_cands = [s.strip() for s in step_cands]
@@ -188,6 +191,7 @@ def best_first_search(
             })
 
     if len(attempt_results) == 0:
+
         attempt_results.append({
             'theorem': theorem.full_name,
             'success': False,
@@ -211,17 +215,18 @@ def _save(model_name, results, args_dict, output_dir, shard):
         print(output_file)
 
 
-# def _load_model(model_name, tp_degree):
-#     model = vllm.LLM(
-#         model=model_name,
-#         tensor_parallel_size=tp_degree,
-#         dtype='float16',
-#         max_num_batched_tokens=32768,
-#         trust_remote_code=True,
-#         enforce_eager=True
-#     )
-#     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name,trust_remote_code=True)
-#     return model, tokenizer
+def _load_model(model_name, tp_degree):
+    model = vllm.LLM(
+        model=model_name,
+        seed=seed,
+        tensor_parallel_size=tp_degree,
+        dtype='float16',
+        max_num_batched_tokens=32768,
+        trust_remote_code=True,
+        enforce_eager=True
+    )
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name,trust_remote_code=True)
+    return model, tokenizer
 
 
 def _load_data(dataset_name, dataset_path):
@@ -304,7 +309,7 @@ if __name__ == '__main__':
     parser.add_argument('--clear-process-hours', type=int, default=3)
     parser.add_argument('--temperatures', type=float, nargs='+', default=[0.0])
     args = parser.parse_args()
-    # model, tokenizer = _load_model(args.model_name, args.tp_degree)
+
     output_dir = make_output_dir(args.output_dir)
 
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
@@ -320,17 +325,25 @@ if __name__ == '__main__':
     # # use local repo
     # LOCAL_REPO_PATH = "/scratch/gpfs/st3812/datasets/lean-dojo-mew"
 
+
     repo, data = _load_data(args.dataset_name, args.dataset_path)
 
     # #shange test trace
     # traced_repo = trace(repo)
+
+
+    seed = random.randint(1, 9999)
+
+    print("seed:",seed)
+
+    model, tokenizer = _load_model(args.model_name, args.tp_degree)
 
     shard_size = len(data) // args.num_shards
     data = data[args.shard*shard_size:(args.shard+1)*shard_size] if args.num_shards > 1+ args.shard else data[args.shard*shard_size:]
     print("Shard size: %d" % (len(data)))
 
     # # test
-    # data = data[2:3]
+    # data = data[:10]
     
     if args.resume_from is not None:
         results, data = resume_from(args.resume_from, data, args.model_name,args.shard)
@@ -350,8 +363,8 @@ if __name__ == '__main__':
             aaaaa
 
         attempt_results = best_first_search(
-            # theorem, model, tokenizer,
-            theorem, model="", tokenizer="",
+            theorem, model, tokenizer,
+            # theorem, model="", tokenizer="",
             max_iters=args.max_iters,
             prompt_fn=_prompt_function,
             temperatures=args.temperatures,
