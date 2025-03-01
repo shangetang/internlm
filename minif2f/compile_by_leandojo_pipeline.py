@@ -13,32 +13,34 @@ from tqdm import tqdm, trange
 import random
 
 
-def chat_template_to_prompt(prompt_list):
-    result = ""
-    total_step = len(prompt_list)
-    for i, message in enumerate(prompt_list):
-        result += ('<|im_start|>' + message['role'] +
-                   '\n' + message['content'])
-        if i+1 != total_step:
-            result += '<|im_end|>\n'
-        elif message['role'] == 'user':
-            result += '<|im_end|>\n<|im_start|>assistant\n'
-    return result
+# def chat_template_to_prompt(prompt_list):
+#     result = ""
+#     total_step = len(prompt_list)
+#     for i, message in enumerate(prompt_list):
+#         result += ('<|im_start|>' + message['role'] +
+#                    '\n' + message['content'])
+#         if i+1 != total_step:
+#             result += '<|im_end|>\n'
+#         elif message['role'] == 'user':
+#             result += '<|im_end|>\n<|im_start|>assistant\n'
+#     return result
 
-def prompt_style_internlm_chat_stepprover_extractor(result:str):
-    return result
+# def prompt_style_internlm_chat_stepprover_extractor(result:str):
+#     return result
 
-def _prompt_function(theorem, state, proof_before=""):
-    input_template = (  f"---\nNAME: {theorem.full_name}\n\n"
-                            # f"---\nFILE:{theorem.file_path}\n\n"
-                            f"---\nPROOF_BEFORE: {proof_before}\n\n"
-                            f"---\nSTATE_BEFORE: {state}\n\n"
-                            f"---\nTACTIC: "
-                        )
-    prompt = [{"role": "user", "content": input_template}]
-    return prompt
+# def _prompt_function(theorem, state, proof_before=""):
+#     input_template = (  f"---\nNAME: {theorem.full_name}\n\n"
+#                             # f"---\nFILE:{theorem.file_path}\n\n"
+#                             f"---\nPROOF_BEFORE: {proof_before}\n\n"
+#                             f"---\nSTATE_BEFORE: {state}\n\n"
+#                             f"---\nTACTIC: "
+#                         )
+#     prompt = [{"role": "user", "content": input_template}]
+#     return prompt
 
-def generate_vllm(prompt, model, tokenizer, temperatures, num_samples, stop, max_tokens=256):
+
+# adjust it to current vllm?
+def generate_vllm(prompt, model, tokenizer, temperatures, num_samples=32, stop, max_tokens=4096):
     if not isinstance(prompt, str):
         prompt = chat_template_to_prompt(prompt)
     texts, scores = [], []
@@ -84,9 +86,7 @@ def _tactic_state(state):
         ts = state.unsolved_tactic_state
     return ts
 
-
-
-def best_first_search(
+def try_single_thm(
         theorem,
         model,
         tokenizer,
@@ -96,7 +96,7 @@ def best_first_search(
         prompt_fn,
         timeout=600,
         early_stop=False,
-        max_tokens=256
+        max_tokens=4096
 ) -> dict:
     """Best first search."""
     attempt_results = []
@@ -199,6 +199,123 @@ def best_first_search(
         })
 
     return attempt_results
+
+
+
+
+# def best_first_search(
+#         theorem,
+#         model,
+#         tokenizer,
+#         max_iters,
+#         temperatures,
+#         num_samples,
+#         prompt_fn,
+#         timeout=600,
+#         early_stop=False,
+#         max_tokens=256
+# ) -> dict:
+#     """Best first search."""
+#     attempt_results = []
+
+#     try:
+#         # with Dojo(theorem, hard_timeout=timeout,additional_imports=["Mathlib.Tactic"]) as (dojo, init_state):
+#         # this line has DojoInit error
+#         # with Dojo(theorem, timeout=timeout, additional_imports=["Mathlib.Tactic"]) as (dojo, init_state):
+#         with Dojo(theorem, timeout=timeout) as (dojo, init_state):
+
+
+#             start = time.time()
+#             proof_finished = False
+#             queue = [(0.0, [], init_state, [])]
+#             visited = dict() 
+
+#             for iteration in trange(max_iters):
+
+#                 if len(queue) == 0 or proof_finished:
+
+#                     break
+
+#                 total_score, steps, state, trace = heapq.heappop(queue)
+#                 ts = _tactic_state(state)
+#                 visited[ts] = visited.get(ts,0)+1 
+#                 # State de-duplication needs re-compile Lean 4, whose code will be released soon.
+#                 # Here we are tolerating duplicated states, should not impact performance on miniF2F. 
+#                 proof_before = "\n".join(steps)
+
+#                 step_cands, step_scores = generate_vllm(
+#                     prompt_fn(theorem, ts, proof_before),
+#                     model,
+#                     tokenizer,
+#                     temperatures,
+#                     num_samples,
+#                     stop=['<|im_end|>',],
+#                     max_tokens=max_tokens
+#                 )
+
+#                 # # only for downloading lean4 to local
+#                 # step_cands, step_scores = ["omega"], [0.5]
+
+
+#                 step_cands = [s.strip() for s in step_cands]
+
+#                 for step, score in zip(step_cands, step_scores):
+#                     result = dojo.run_tac(state, step)
+#                     step_trace = {
+#                         "tactic": step,
+#                         "state_before": _tactic_state(state)
+#                     }
+#                     if isinstance(result, ProofFinished):
+#                         attempt_results.append({
+#                             'theorem': theorem.full_name,
+#                             'proof': steps + [step],
+#                             'score': total_score - score,
+#                             'success': True,
+#                             'failure_reason': '',
+#                             'trace': trace + [step_trace],
+#                             'temperature': temperatures,
+#                             'elapsed': start - time.time(),
+#                             'iteration': iteration
+#                         })
+#                         if early_stop:
+#                             return attempt_results
+#                         proof_finished = True
+#                         break
+#                     elif isinstance(result, TacticState):
+#                         if visited.get(_tactic_state(result),0) <= 1: #_tactic_state(result) not in visited:
+#                             # Score is negative log probability summed across steps
+#                             visited[_tactic_state(result)] = visited.get(_tactic_state(result),0) + 1
+#                             new_score = (total_score - score)
+#                             heapq.heappush(
+#                                 queue, (new_score, steps+[step], result, trace+[step_trace])
+#                             )
+#     # except (DojoInitError, DojoHardTimeoutError, DojoCrashError, subprocess.CalledProcessError) as e:
+#     except (DojoInitError, DojoTacticTimeoutError, DojoCrashError, subprocess.CalledProcessError) as e:
+        
+#         #test
+#         print(e,type(e))
+
+
+#         if len(attempt_results) == 0:
+#             attempt_results.append({
+#                 'theorem': theorem.full_name,
+#                 'success': False,
+
+#                 # # test
+#                 # 'detailed_failure_reson' : type(e),
+
+#                 'failure_reason': type(e).__name__
+#             })
+
+#     if len(attempt_results) == 0:
+
+#         attempt_results.append({
+#             'theorem': theorem.full_name,
+#             'success': False,
+#             'failure_reason': 'SearchEnded'
+#         })
+
+#     return attempt_results
 
 
 def _save(model_name, results, args_dict, output_dir, shard):
@@ -362,7 +479,6 @@ if __name__ == '__main__':
             print("file_path:", file_path)
             print("theorem_name", theorem_name)
             print(e)
-            aaaaa
 
         attempt_results = best_first_search(
             theorem, model, tokenizer,

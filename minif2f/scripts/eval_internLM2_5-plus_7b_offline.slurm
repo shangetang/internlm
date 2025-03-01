@@ -7,10 +7,11 @@
 #SBATCH --cpus-per-task=10        # cpu-cores per task (>1 if multi-threaded tasks)
 #SBATCH --mem-per-cpu=10G         # memory per cpu-core (4G is default)
 #SBATCH --gres=gpu:1        # number of gpus per node
+#SBATCH --constraint=gpu80
 #SBATCH --time=4:50:00          # total run time limit (HH:MM:SS)
 #SBATCH --mail-type=FAIL         
 #SBATCH --mail-user=st3812@princeton.edu
-#SBATCH --array=0-31             # create a job array with 32 tasks (0 to 31)
+#SBATCH --array=0-11             # create a job array with 32 tasks (0 to 31)
 
 
 source /scratch/gpfs/st3812/.bashrc
@@ -61,6 +62,7 @@ do
   --num-samples ${NUM_SAMPLES} --early-stop --output-dir ${OUTPUT_DIR} \
   # &> logs/${NAME}_local_offline_shard${SHARD}.out &
 done
+
 
 
 

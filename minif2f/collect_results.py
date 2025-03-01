@@ -40,7 +40,7 @@ def merge_json_files(root_directory, output_file):
         print(f"Error writing to {output_file}: {e}")
 
 # Example usage
-root_directory = '/scratch/gpfs/st3812/InternLM-Math/minif2f/output/internLM2_5-step-prover_minif2f_test_local_offline_gpu_1*32*600'
+root_directory = '/scratch/gpfs/st3812/InternLM-Math/minif2f/output/internLM2_5-step-prover_minif2f_test_local_offline_gpu_1*1*20'
 output_file = f'{root_directory}/full_results.json'
 merge_json_files(root_directory, output_file)
 
