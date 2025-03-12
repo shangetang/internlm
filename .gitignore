@@ -1,0 +1,9 @@
+**/.ipynb_checkpoints/
+**/*.json
+**/*.jsonl
+**/*.log
+parser.ipynb
+**/*.txt
+**/*.deprecated
+**/*.csv
+lwb_v1tov5_cot2_segmented/
