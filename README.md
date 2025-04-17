@@ -1,3 +1,5 @@
+in trace_repo:
+
 save_training_data_to_lean_repo.py : save training data to lean repo
 
 fix_wrong_proofs_one_log.py : used to comment out wrong proofs in .lean files, and remove import for bad files
