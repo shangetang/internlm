@@ -1,3 +1,17 @@
+save_training_data_to_lean_repo.py : save training data to lean repo
+
+fix_wrong_proofs_one_log.py : used to comment out wrong proofs in .lean files, and remove import for bad files
+
+trace_our_theorem_mathlib4_small.py : trace theorem in repo
+
+pipeline:
+1. save data to lean repo in certain structure
+2. trace theorem and fix proofs for two times
+3. the third time just remove all the files that are not successfully compiled
+
+
+
+
 # InternLM-Math
 
 <div align="center">
