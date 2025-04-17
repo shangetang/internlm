@@ -1,3 +1,5 @@
 .DS_Store
 /minif2f/logs/
 /minif2f/output/
+/minif2f/*.log
+/trace_repo/*.log

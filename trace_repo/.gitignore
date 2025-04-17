@@ -1,0 +1,12 @@
+.vscode/
+
+*.csv
+# *.json
+
+*.log
+log/
+slurm-*
+__pycache__/
+logs/
+
+# tree_search/output/

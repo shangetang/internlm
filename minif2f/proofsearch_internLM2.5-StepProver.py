@@ -311,9 +311,9 @@ if __name__ == '__main__':
 
 
     # true if local repo
-    os.environ['DISABLE_REMOTE_CACHE'] = 'true'
+    # os.environ['DISABLE_REMOTE_CACHE'] = 'true'
 
-    # os.environ['DISABLE_REMOTE_CACHE'] = 'false'
+    os.environ['DISABLE_REMOTE_CACHE'] = 'false'
 
     # os.environ['CACHE_DIR'] = '/scratch/gpfs/st3812/.cache/lean_dojo'
 
